@@ -24,7 +24,7 @@ class SimpleRetriever(BaseRetriever):
         self.vector_store = vector_store
         self.settings = get_settings()
 
-    def retrieve(self, query: str, k: int | None = None, video_id: str | None = None) -> list[dict[str, Any]]:
+    def retrieve(self, query: str, k: int | None = None, video_id: str | None = None, where: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Retrieve relevant documents for a query.
 
         Args:
@@ -40,7 +40,7 @@ class SimpleRetriever(BaseRetriever):
         query_embedding = self.embedder.embed_text(query)
 
         # Search vector store
-        results = self.vector_store.search(query_embedding, k=k, video_id=video_id)
+        results = self.vector_store.search(query_embedding, k=k, video_id=video_id, where=where)
 
         # Format results
         documents = [

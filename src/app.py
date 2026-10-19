@@ -70,6 +70,20 @@ def clear_index() -> str:
         return f"Error: {str(e)}"
 
 
+def clear_index_and_refresh():
+    return clear_index(), refresh_scope()
+
+
+def delete_selected_source(source_id: str):
+    if not source_id:
+        return "Select a source first.", refresh_scope()
+    try:
+        indexing_service.delete_source(source_id)
+        return "Source deleted successfully.", refresh_scope()
+    except Exception as error:
+        return f"Error: {error}", refresh_scope()
+
+
 def index_video(video_url: str) -> str:
     try:
         if not video_url or not video_url.strip():
@@ -79,6 +93,26 @@ def index_video(video_url: str) -> str:
     except Exception as error:
         logger.error("Error indexing video: %s", error)
         return f"Error: {error}\n\nIf captions are unavailable or YouTube blocks automated retrieval (IpBlocked/HTTP 429), use the Import Transcript tab."
+
+
+def index_pdf(file_path: str) -> str:
+    try:
+        if not file_path:
+            return "Please upload a PDF file."
+        stats = indexing_service.index_pdf(file_path)
+        return f"PDF indexed successfully: {stats['source_name']}\nChunks: {stats['total_chunks']}"
+    except Exception as error:
+        return f"Error: {error}"
+
+
+def index_website(url: str) -> str:
+    try:
+        if not url or not url.strip():
+            return "Please enter a website URL."
+        stats = indexing_service.index_website(url)
+        return f"Website indexed successfully: {stats['source_name']}\nURL: {stats['source_url']}\nChunks: {stats['total_chunks']}"
+    except Exception as error:
+        return f"Error: {error}"
 
 
 def index_manual_transcript(video_url: str, video_title: str, transcript: str) -> str:
@@ -93,6 +127,24 @@ def index_manual_transcript(video_url: str, video_title: str, transcript: str) -
     except Exception as error:
         logger.error("Error indexing manual transcript: %s", error)
         return f"Error: {error}"
+
+
+def scope_choices() -> list[tuple[str, str]]:
+    choices = [("All Sources", "")]
+    seen = set()
+    for source in indexing_service.list_sources():
+        source_id = source.get("source_id")
+        if not source_id or source_id in seen:
+            continue
+        seen.add(source_id)
+        source_type = source.get("source_type", "source").replace("_", " ").title()
+        name = source.get("source_name") or source.get("video_title") or source_id
+        choices.append((f"{name} — {source_type}", source_id))
+    return choices
+
+
+def refresh_scope():
+    return gr.Dropdown(choices=scope_choices(), value="", interactive=True)
 
 
 def chat(message: str, history: list[list[str]], video_scope: str = "") -> str:
@@ -110,8 +162,11 @@ def chat(message: str, history: list[list[str]], video_scope: str = "") -> str:
             return "Please enter a question."
 
         logger.info(f"Processing question: {message}")
-        scope_id = parse_video_id(video_scope) if video_scope.strip() else None
-        result = chat_service.ask(message, video_id=scope_id)
+        selected_source = video_scope.strip() or None
+        valid_ids = {value for _, value in scope_choices() if value}
+        if selected_source and selected_source not in valid_ids:
+            return "The selected source is no longer indexed. Refresh the source list and select a valid source."
+        result = chat_service.ask(message, source_id=selected_source)
 
         # Format response with sources
         response = result["answer"]
@@ -141,6 +196,13 @@ with gr.Blocks(title="YouTube RAG System", theme=gr.themes.Soft()) as demo:
         # YouTube RAG System
         Index YouTube channels and chat with their content using AI.
         """
+    )
+
+    scope_dropdown = gr.Dropdown(
+        label="Retrieval scope",
+        choices=scope_choices(),
+        value="",
+        info="All Sources or one indexed source.",
     )
 
     with gr.Tab("Index Channel"):
@@ -179,14 +241,26 @@ with gr.Blocks(title="YouTube RAG System", theme=gr.themes.Soft()) as demo:
             clear_button = gr.Button("Clear Index", variant="stop")
             clear_output = gr.Textbox(label="Clear Status", lines=2)
 
-        clear_button.click(fn=clear_index, outputs=clear_output)
+        clear_button.click(fn=clear_index_and_refresh, outputs=[clear_output, scope_dropdown])
 
     with gr.Tab("Index Video"):
         gr.Markdown("### Index one YouTube video\nPaste a public video URL. Captions are retrieved automatically when available.")
         video_url_input = gr.Textbox(label="YouTube Video URL", placeholder="https://www.youtube.com/watch?v=...")
         video_index_button = gr.Button("Index Video", variant="primary")
         video_index_output = gr.Textbox(label="Status", lines=4)
-        video_index_button.click(index_video, video_url_input, video_index_output)
+        video_index_button.click(lambda url: (index_video(url), refresh_scope()), video_url_input, [video_index_output, scope_dropdown])
+
+    with gr.Tab("Index PDF"):
+        pdf_input = gr.File(label="PDF file", file_types=[".pdf"], type="filepath")
+        pdf_button = gr.Button("Index PDF", variant="primary")
+        pdf_output = gr.Textbox(label="Status", lines=3)
+        pdf_button.click(lambda path: (index_pdf(path), refresh_scope()), pdf_input, [pdf_output, scope_dropdown])
+
+    with gr.Tab("Index Website"):
+        website_input = gr.Textbox(label="Public webpage URL", placeholder="https://example.com/article")
+        website_button = gr.Button("Index Website", variant="primary")
+        website_output = gr.Textbox(label="Status", lines=3)
+        website_button.click(lambda url: (index_website(url), refresh_scope()), website_input, [website_output, scope_dropdown])
 
     with gr.Tab("Chat"):
         gr.Markdown(
@@ -204,12 +278,6 @@ with gr.Blocks(title="YouTube RAG System", theme=gr.themes.Soft()) as demo:
             label="Your Question",
             placeholder="Ask a question about the indexed videos...",
         )
-        video_scope = gr.Textbox(
-            label="Scope to video (optional)",
-            placeholder="Paste the indexed video's URL or 11-character ID",
-            info="When set, retrieval uses only chunks from this video.",
-        )
-
         with gr.Row():
             submit = gr.Button("Send", variant="primary")
             clear = gr.Button("Clear Chat")
@@ -221,9 +289,13 @@ with gr.Blocks(title="YouTube RAG System", theme=gr.themes.Soft()) as demo:
             chat_history.append({"role": "assistant", "content": bot_message})
             return "", chat_history
 
-        submit.click(respond, [msg, chatbot, video_scope], [msg, chatbot])
-        msg.submit(respond, [msg, chatbot, video_scope], [msg, chatbot])
+        submit.click(respond, [msg, chatbot, scope_dropdown], [msg, chatbot])
+        msg.submit(respond, [msg, chatbot, scope_dropdown], [msg, chatbot])
         clear.click(lambda: [], None, chatbot, queue=False)
+
+        delete_button = gr.Button("Delete Selected Source", variant="stop")
+        delete_output = gr.Textbox(label="Source Status", lines=2)
+        delete_button.click(delete_selected_source, scope_dropdown, [delete_output, scope_dropdown])
 
     with gr.Tab("Import Transcript"):
         gr.Markdown(
@@ -240,9 +312,9 @@ with gr.Blocks(title="YouTube RAG System", theme=gr.themes.Soft()) as demo:
         manual_button = gr.Button("Index Transcript", variant="primary")
         manual_output = gr.Textbox(label="Status", lines=3)
         manual_button.click(
-            fn=index_manual_transcript,
+            fn=lambda url, title, transcript: (index_manual_transcript(url, title, transcript), refresh_scope()),
             inputs=[manual_url, manual_title, manual_transcript],
-            outputs=manual_output,
+            outputs=[manual_output, scope_dropdown],
         )
 
     gr.Markdown(

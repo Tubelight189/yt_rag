@@ -76,7 +76,7 @@ class ChromaVectorStore(BaseVectorStore):
             if metadatas is None:
                 metadatas = [{} for _ in texts]
 
-            self.collection.add(
+            self.collection.upsert(
                 documents=texts,
                 embeddings=embeddings,
                 metadatas=metadatas,
@@ -88,7 +88,8 @@ class ChromaVectorStore(BaseVectorStore):
             raise VectorStoreError(f"Failed to add documents: {e}")
 
     def search(
-        self, query_embedding: list[float], k: int = 5, video_id: str | None = None
+        self, query_embedding: list[float], k: int = 5, video_id: str | None = None,
+        where: dict[str, Any] | None = None,
     ) -> list[tuple[str, float, dict[str, Any]]]:
         """Search for similar documents.
 
@@ -103,6 +104,8 @@ class ChromaVectorStore(BaseVectorStore):
             query_args = {"query_embeddings": [query_embedding], "n_results": k}
             if video_id:
                 query_args["where"] = {"video_id": video_id}
+            elif where:
+                query_args["where"] = where
             results = self.collection.query(**query_args)
 
             # Format results
@@ -121,6 +124,17 @@ class ChromaVectorStore(BaseVectorStore):
         except Exception as e:
             logger.error(f"Failed to search ChromaDB: {e}")
             raise VectorStoreError(f"Failed to search: {e}")
+
+    def delete_source(self, source_id: str) -> None:
+        self.collection.delete(where={"source_id": source_id})
+
+    def list_sources(self) -> list[dict[str, Any]]:
+        result = self.collection.get(include=["metadatas"])
+        sources = {}
+        for metadata in result.get("metadatas", []):
+            if metadata and metadata.get("source_id"):
+                sources[metadata["source_id"]] = metadata
+        return list(sources.values())
 
     def delete_collection(self) -> None:
         """Delete the entire collection."""

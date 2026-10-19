@@ -73,6 +73,7 @@ class ChatService(BaseService):
         k: int | None = None,
         system_prompt: str | None = None,
         video_id: str | None = None,
+        source_id: str | None = None,
     ) -> dict[str, Any]:
         """Ask a question about the indexed content.
 
@@ -88,7 +89,7 @@ class ChatService(BaseService):
             logger.info(f"Processing question: {question}")
 
             # Retrieve relevant documents
-            documents = self.retriever.retrieve(question, k=k, video_id=video_id)
+            documents = self.retriever.retrieve(question, k=k, video_id=video_id, where={"source_id": source_id} if source_id else None)
 
             if not documents:
                 return {
@@ -112,6 +113,8 @@ class ChatService(BaseService):
                 metadata = doc.get("metadata", {})
                 sources.append(
                     {
+                        "source_id": metadata.get("source_id", ""),
+                        "source_type": metadata.get("source_type", ""),
                         "video_title": metadata.get("video_title", "Unknown"),
                         "video_id": metadata.get("video_id", ""),
                         "channel_name": metadata.get("channel_name", "Unknown"),
