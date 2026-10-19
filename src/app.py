@@ -1,5 +1,8 @@
 """Gradio UI for YouTube RAG system."""
 
+from pathlib import Path
+from functools import partial
+
 import gradio as gr
 
 from src.core.logging import get_logger, setup_logging
@@ -144,7 +147,7 @@ def scope_choices() -> list[tuple[str, str]]:
 
 
 def refresh_scope():
-    return gr.Dropdown(choices=scope_choices(), value="", interactive=True)
+    return gr.update(choices=scope_choices(), value="", interactive=True)
 
 
 def chat(message: str, history: list[list[str]], video_scope: str = "") -> str:
@@ -173,14 +176,22 @@ def chat(message: str, history: list[list[str]], video_scope: str = "") -> str:
 
         if result["sources"]:
             response += "\n\n**Sources:**\n"
-            seen_videos = set()
+            seen_sources = set()
             for source in result["sources"]:
                 video_id = source["video_id"]
-                if video_id not in seen_videos:
-                    video_title = source["video_title"]
-                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                    response += f"- [{video_title}]({video_url})\n"
-                    seen_videos.add(video_id)
+                source_key = source.get("source_id") or video_id
+                if source_key and source_key not in seen_sources:
+                    video_title = source.get("video_title", "Unknown")
+                    source_type = source.get("source_type", "source").replace("_", " ").title()
+                    if video_id:
+                        label = video_title if video_title != "Unknown" else source_type
+                        video_url = f"https://www.youtube.com/watch?v={video_id}"
+                        response += f"- [{label}]({video_url})\n"
+                    else:
+                        # Non-YouTube source metadata does not include a public URL.
+                        source_ref = source.get("source_id") or source_type
+                        response += f"- {source_type} source (`{source_ref}`)\n"
+                    seen_sources.add(source_key)
 
         return response
 
@@ -189,145 +200,223 @@ def chat(message: str, history: list[list[str]], video_scope: str = "") -> str:
         return f"Error: {str(e)}"
 
 
-# Create Gradio interface
-with gr.Blocks(title="YouTube RAG System", theme=gr.themes.Soft()) as demo:
-    gr.Markdown(
-        """
-        # YouTube RAG System
-        Index YouTube channels and chat with their content using AI.
-        """
-    )
+# Frontend-only helpers keep the service callbacks above unchanged.
+def refresh_scope_pair():
+    return refresh_scope(), refresh_scope()
 
-    scope_dropdown = gr.Dropdown(
-        label="Retrieval scope",
-        choices=scope_choices(),
-        value="",
-        info="All Sources or one indexed source.",
-    )
 
-    with gr.Tab("Index Channel"):
-        gr.Markdown(
-            """
-            ### Index a YouTube Channel
-            Enter a YouTube channel handle to index its videos and transcripts.
-            """
-        )
+def index_channel_ui(handle: str, limit: int):
+    return index_channel(handle, limit), *refresh_scope_pair()
 
-        with gr.Row():
-            channel_input = gr.Textbox(
-                label="Channel Handle",
-                placeholder="@channelname",
-                info="Enter the YouTube channel handle (e.g., @veritasium)",
-            )
-            max_videos_input = gr.Slider(
-                minimum=1,
-                maximum=200,
-                value=50,
-                step=1,
-                label="Max Videos",
-                info="Maximum number of videos to index",
-            )
 
-        index_button = gr.Button("Index Channel", variant="primary")
-        index_output = gr.Textbox(label="Status", lines=8)
+def index_video_ui(url: str):
+    return index_video(url), *refresh_scope_pair()
 
-        index_button.click(
-            fn=index_channel,
-            inputs=[channel_input, max_videos_input],
-            outputs=index_output,
-        )
 
-        with gr.Row():
-            clear_button = gr.Button("Clear Index", variant="stop")
-            clear_output = gr.Textbox(label="Clear Status", lines=2)
+def index_pdf_ui(path: str):
+    return index_pdf(path), *refresh_scope_pair()
 
-        clear_button.click(fn=clear_index_and_refresh, outputs=[clear_output, scope_dropdown])
 
-    with gr.Tab("Index Video"):
-        gr.Markdown("### Index one YouTube video\nPaste a public video URL. Captions are retrieved automatically when available.")
-        video_url_input = gr.Textbox(label="YouTube Video URL", placeholder="https://www.youtube.com/watch?v=...")
-        video_index_button = gr.Button("Index Video", variant="primary")
-        video_index_output = gr.Textbox(label="Status", lines=4)
-        video_index_button.click(lambda url: (index_video(url), refresh_scope()), video_url_input, [video_index_output, scope_dropdown])
+def index_website_ui(url: str):
+    return index_website(url), *refresh_scope_pair()
 
-    with gr.Tab("Index PDF"):
-        pdf_input = gr.File(label="PDF file", file_types=[".pdf"], type="filepath")
-        pdf_button = gr.Button("Index PDF", variant="primary")
-        pdf_output = gr.Textbox(label="Status", lines=3)
-        pdf_button.click(lambda path: (index_pdf(path), refresh_scope()), pdf_input, [pdf_output, scope_dropdown])
 
-    with gr.Tab("Index Website"):
-        website_input = gr.Textbox(label="Public webpage URL", placeholder="https://example.com/article")
-        website_button = gr.Button("Index Website", variant="primary")
-        website_output = gr.Textbox(label="Status", lines=3)
-        website_button.click(lambda url: (index_website(url), refresh_scope()), website_input, [website_output, scope_dropdown])
+def index_transcript_ui(url: str, title: str, transcript: str):
+    return index_manual_transcript(url, title, transcript), *refresh_scope_pair()
 
-    with gr.Tab("Chat"):
-        gr.Markdown(
-            """
-            ### Ask Questions
-            Chat with the indexed YouTube content. Make sure to index a channel first!
-            """
-        )
 
-        chatbot = gr.Chatbot(
-            label="Chat with YouTube Content",
-            height=500,
-        )
-        msg = gr.Textbox(
-            label="Your Question",
-            placeholder="Ask a question about the indexed videos...",
-        )
-        with gr.Row():
-            submit = gr.Button("Send", variant="primary")
-            clear = gr.Button("Clear Chat")
+def refresh_library_ui():
+    return refresh_scope_pair()
 
-        def respond(message, chat_history, selected_video_scope):
-            """Handle a chat turn with the optional video scope."""
-            bot_message = chat(message, chat_history, selected_video_scope or "")
-            chat_history.append({"role": "user", "content": message})
-            chat_history.append({"role": "assistant", "content": bot_message})
-            return "", chat_history
 
-        submit.click(respond, [msg, chatbot, scope_dropdown], [msg, chatbot])
-        msg.submit(respond, [msg, chatbot, scope_dropdown], [msg, chatbot])
-        clear.click(lambda: [], None, chatbot, queue=False)
+def delete_source_ui(source_id: str, confirmed: bool):
+    if not confirmed:
+        status = "Confirm source deletion using the checkbox first."
+    else:
+        status, _ = delete_selected_source(source_id)
+    return status, *refresh_scope_pair(), gr.update(value=False)
 
-        delete_button = gr.Button("Delete Selected Source", variant="stop")
-        delete_output = gr.Textbox(label="Source Status", lines=2)
-        delete_button.click(delete_selected_source, scope_dropdown, [delete_output, scope_dropdown])
 
-    with gr.Tab("Import Transcript"):
-        gr.Markdown(
-            """### Import an Authorized Transcript
+def clear_library_ui(confirmed: bool):
+    if not confirmed:
+        status = "Confirm clearing the full index using the checkbox first."
+    else:
+        status, _ = clear_index_and_refresh()
+    return status, *refresh_scope_pair(), gr.update(value=False)
 
-            If YouTube blocks automated caption retrieval, paste transcript text you
-            are authorized to use. It will be chunked, embedded, and stored exactly
-            like a retrieved transcript.
-            """
-        )
-        manual_url = gr.Textbox(label="Video URL (optional)")
-        manual_title = gr.Textbox(label="Video title (optional)")
-        manual_transcript = gr.Textbox(label="Transcript text", lines=14)
-        manual_button = gr.Button("Index Transcript", variant="primary")
-        manual_output = gr.Textbox(label="Status", lines=3)
-        manual_button.click(
-            fn=lambda url, title, transcript: (index_manual_transcript(url, title, transcript), refresh_scope()),
-            inputs=[manual_url, manual_title, manual_transcript],
-            outputs=[manual_output, scope_dropdown],
-        )
 
-    gr.Markdown(
-        """
-        ---
-        ### How to Use:
-        1. Go to the "Index Channel" tab
-        2. Enter a YouTube channel handle (e.g., @veritasium)
-        3. Click "Index Channel" and wait for it to complete
-        4. Go to the "Chat" tab
-        5. Ask questions about the channel's content!
-        """
-    )
+def respond(message, chat_history, selected_source):
+    """Append one user and assistant turn in Gradio's messages format."""
+    history = list(chat_history or [])
+    if not message or not message.strip():
+        return "", history
+    answer = chat(message, history, selected_source or "")
+    history.extend([
+        {"role": "user", "content": message.strip()},
+        {"role": "assistant", "content": answer},
+    ])
+    return "", history
+
+
+NAV_ITEMS = [
+    ("Dashboard", "⌂"), ("AI Chat", "✦"),
+    ("YouTube Channel", "▶"), ("YouTube Video", "▷"),
+    ("PDF Documents", "▤"), ("Website Analyzer", "◎"),
+    ("Transcript Import", "≋"), ("Manage Sources", "⚙"),
+]
+PAGE_NAMES = [name for name, _ in NAV_ITEMS]
+
+
+def select_page(page: str):
+    updates = [gr.update(visible=(name == page)) for name in PAGE_NAMES]
+    updates.extend(gr.update(variant="primary" if name == page else "secondary") for name in PAGE_NAMES)
+    return updates
+
+
+with (Path(__file__).resolve().parent / "assets" / "styles.css").open(encoding="utf-8") as css_file:
+    APP_CSS = css_file.read()
+
+
+with gr.Blocks(title="NEXUS AI | Intelligent Knowledge Companion") as demo:
+    with gr.Sidebar(position="left", width=270, elem_id="nexus-sidebar"):
+        with gr.Column(elem_classes="sidebar-navigation"):
+            gr.HTML("""
+                <div class="brand-lockup"><div class="brand-symbol"><span>✦</span></div>
+                <div><div class="brand-name">NEXUS <span>AI</span></div><div class="brand-subtitle">KNOWLEDGE, CONNECTED</div></div></div>
+            """)
+            gr.Markdown("MAIN", elem_classes="nav-section-label")
+            nav_buttons = {}
+            for nav_name, nav_icon in NAV_ITEMS[:2]:
+                nav_buttons[nav_name] = gr.Button(f"{nav_icon}   {nav_name}", variant="primary" if nav_name == "Dashboard" else "secondary", elem_classes="nav-button")
+            gr.Markdown("KNOWLEDGE SOURCES", elem_classes="nav-section-label")
+            for nav_name, nav_icon in NAV_ITEMS[2:7]:
+                nav_buttons[nav_name] = gr.Button(f"{nav_icon}   {nav_name}", variant="secondary", elem_classes="nav-button")
+            gr.Markdown("MANAGEMENT", elem_classes="nav-section-label")
+            nav_buttons["Manage Sources"] = gr.Button("⚙   Manage Sources", variant="secondary", elem_classes="nav-button")
+        gr.HTML("<div class='sidebar-foot'><span class='status-dot'></span><span>Your Private Knowledge Space</span></div>")
+
+    with gr.Column(elem_id="nexus-main"):
+        with gr.Group(visible=True, elem_id="nexus-dashboard", elem_classes=["page-view", "nexus-page-background"]) as dashboard_page:
+            gr.HTML("""
+                <section class="hero-card"><div class="hero-glow hero-glow-one"></div><div class="hero-glow hero-glow-two"></div>
+                  <div class="hero-content"><div class="eyebrow"><span class="live-dot"></span> YOUR INTELLIGENT KNOWLEDGE COMPANION</div>
+                    <h1>Transform Content<br><span>Into Intelligence</span></h1>
+                    <p>Unlock insights from YouTube videos, documents, and websites using the power of AI. Upload, analyze, and interact with your knowledge effortlessly.</p>
+                  </div><div class="hero-orbit" aria-hidden="true"><div class="orbit-ring ring-one"></div><div class="orbit-ring ring-two"></div><div class="orbit-core">✦</div><i class="orbit-node node-one"></i><i class="orbit-node node-two"></i><i class="orbit-node node-three"></i></div>
+                </section>
+            """)
+            gr.Markdown("###      Welcome to NEXUS AI\nYour AI-powered workspace for intelligent content exploration.", elem_classes="welcome-copy")
+            with gr.Row(elem_classes="overview-row"):
+                with gr.Column(scale=3, elem_classes="source-count-card"):
+                    gr.Markdown("**KNOWLEDGE LIBRARY**")
+                    source_count_display = gr.Markdown("**Indexed Sources**", elem_classes="source-count-value")
+                with gr.Column(scale=2, elem_classes="overview-hint"):
+                    gr.Markdown("**A GROUNDED AI WORKSPACE**\n\nAnswers are drawn from the sources you choose.")
+            gr.Markdown("### Explore your knowledge tools", elem_classes="cards-heading")
+            with gr.Row(elem_classes="feature-grid"):
+                with gr.Column(elem_classes="feature-card cyan-card"):
+                    gr.HTML("<div class='feature-icon'>▶</div><div class='feature-kicker'>VIDEO LIBRARY</div><h3>YouTube Intelligence</h3><p>Analyze YouTube videos and channels.</p>")
+                    dashboard_channel = gr.Button("Explore channel indexing  ↗", variant="secondary")
+                with gr.Column(elem_classes="feature-card purple-card"):
+                    gr.HTML("<div class='feature-icon'>▤</div><div class='feature-kicker'>DOCUMENTS</div><h3>Document Intelligence</h3><p>Upload PDFs and extract valuable insights.</p>")
+                    dashboard_pdf = gr.Button("Explore PDF tools  ↗", variant="secondary")
+                with gr.Column(elem_classes="feature-card blue-card"):
+                    gr.HTML("<div class='feature-icon'>◎</div><div class='feature-kicker'>WEB CONTENT</div><h3>Website Intelligence</h3><p>Transform web content into searchable knowledge.</p>")
+                    dashboard_website = gr.Button("Explore website tools  ↗", variant="secondary")
+                with gr.Column(elem_classes="feature-card violet-card"):
+                    gr.HTML("<div class='feature-icon'>✦</div><div class='feature-kicker'>ASK YOUR LIBRARY</div><h3>AI Knowledge Chat</h3><p>Ask questions and receive intelligent answers.</p>")
+                    dashboard_chat = gr.Button("Start a conversation  ↗", variant="secondary")
+
+        with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as chat_page:
+            gr.HTML("<div class='page-heading'><div class='eyebrow'>NEXUS CONVERSATION</div><h1>AI Knowledge Chat</h1><p>Explore your indexed sources with grounded answers and references.</p></div>")
+            gr.Markdown("RETRIEVAL SCOPE", elem_classes="source-selector-label")
+            gr.Markdown("Search across all sources or focus on one.", elem_classes="source-selector-description")
+            chat_scope = gr.Dropdown(choices=scope_choices(), value="", container=False, elem_id="nexus-source-selector", elem_classes=["nexus-input", "nexus-source-selector"])
+            chatbot = gr.Chatbot(label="Conversation", height=490, layout="bubble", autoscroll=True,
+                placeholder="<div class='chat-empty'><div class='chat-empty-icon'>✦</div><h2>Hello! I'm NEXUS AI.</h2><p>Ask me anything about your indexed knowledge sources.</p></div>",
+                elem_classes="nexus-chatbot")
+            with gr.Row(elem_classes="chat-compose"):
+                msg = gr.Textbox(label="", placeholder="Ask a question about your knowledge…", lines=2, scale=8, elem_classes="nexus-input")
+                with gr.Column(scale=1, min_width=145):
+                    submit = gr.Button("Send  ↑", variant="primary", elem_classes="send-button")
+                    clear_chat = gr.Button("Clear chat", variant="secondary")
+            submit.click(respond, [msg, chatbot, chat_scope], [msg, chatbot], show_progress="minimal")
+            msg.submit(respond, [msg, chatbot, chat_scope], [msg, chatbot], show_progress="minimal")
+            clear_chat.click(lambda: ("", []), outputs=[msg, chatbot], queue=False)
+
+        with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as channel_page:
+            gr.HTML("<div class='page-heading'><div class='eyebrow'>KNOWLEDGE SOURCES / YOUTUBE</div><h1>YouTube Channel</h1><p>Bring a channel’s video library into your searchable knowledge space.</p></div>")
+            with gr.Column(elem_classes="glass-panel source-panel"):
+                gr.HTML("<div class='source-panel-icon cyan-icon'>▶</div><h2>Index a YouTube channel</h2><p>Enter a channel handle and choose how many recent videos to scan.</p>")
+                channel_input = gr.Textbox(label="CHANNEL HANDLE", placeholder="@veritasium", info="Use the channel handle, for example @veritasium.", elem_classes="nexus-input")
+                max_videos_input = gr.Slider(minimum=1, maximum=200, value=50, step=1, label="MAXIMUM VIDEOS")
+                index_button = gr.Button("Index Channel  ↗", variant="primary", elem_classes="gradient-action")
+                index_output = gr.Textbox(label="INDEXING STATUS", lines=4, interactive=False)
+
+        with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as video_page:
+            gr.HTML("<div class='page-heading'><div class='eyebrow'>KNOWLEDGE SOURCES / YOUTUBE</div><h1>YouTube Video</h1><p>Turn one video into a source you can search and ask questions about.</p></div>")
+            with gr.Column(elem_classes="glass-panel source-panel video-panel"):
+                gr.HTML("<div class='source-panel-icon red-icon'>▷</div><h2>Analyze a video</h2><p>Paste a public YouTube video URL. Captions are indexed when available.</p>")
+                video_url_input = gr.Textbox(label="YOUTUBE VIDEO URL", placeholder="https://www.youtube.com/watch?v=…", elem_classes="nexus-input")
+                video_index_button = gr.Button("Analyze Video  ↗", variant="primary", elem_classes="gradient-action")
+                video_index_output = gr.Textbox(label="ANALYSIS STATUS", lines=4, interactive=False)
+
+        with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as pdf_page:
+            gr.HTML("<div class='page-heading'><div class='eyebrow'>KNOWLEDGE SOURCES / DOCUMENTS</div><h1>PDF Documents</h1><p>Extract searchable knowledge from your course notes and reference documents.</p></div>")
+            with gr.Column(elem_classes="glass-panel source-panel upload-panel"):
+                gr.HTML("<div class='source-panel-icon purple-icon'>▤</div><h2>Process a document</h2><p>Choose a PDF to add its extractable text to your knowledge library.</p>")
+                pdf_input = gr.File(label="DROP A PDF HERE OR BROWSE", file_types=[".pdf"], type="filepath", elem_classes="pdf-dropzone")
+                pdf_button = gr.Button("Process Document  ↗", variant="primary", elem_classes="gradient-action")
+                pdf_output = gr.Textbox(label="PROCESSING STATUS", lines=4, interactive=False)
+
+        with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as website_page:
+            gr.HTML("<div class='page-heading'><div class='eyebrow'>KNOWLEDGE SOURCES / WEB</div><h1>Website Analyzer</h1><p>Make an individual public webpage part of your searchable knowledge.</p></div>")
+            with gr.Column(elem_classes="glass-panel source-panel"):
+                gr.HTML("<div class='source-panel-icon blue-icon'>◎</div><h2>Analyze a webpage</h2><p>Add an article or public webpage to the NEXUS knowledge space.</p>")
+                website_input = gr.Textbox(label="PUBLIC WEBSITE URL", placeholder="https://example.com/article", elem_classes="nexus-input")
+                website_button = gr.Button("Analyze Website  ↗", variant="primary", elem_classes="gradient-action")
+                website_output = gr.Textbox(label="ANALYSIS STATUS", lines=4, interactive=False)
+
+        with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as transcript_page:
+            gr.HTML("<div class='page-heading'><div class='eyebrow'>KNOWLEDGE SOURCES / IMPORT</div><h1>Transcript Import</h1><p>Use transcript text you are authorized to add to your searchable library.</p></div>")
+            with gr.Column(elem_classes="glass-panel source-panel transcript-panel"):
+                gr.HTML("<div class='source-panel-icon violet-icon'>≋</div><h2>Import a transcript</h2><p>Add optional video details, then paste the transcript below.</p>")
+                manual_url = gr.Textbox(label="YOUTUBE VIDEO URL · OPTIONAL", placeholder="https://www.youtube.com/watch?v=…", elem_classes="nexus-input")
+                manual_title = gr.Textbox(label="VIDEO TITLE · OPTIONAL", placeholder="Lecture 01 — Introduction", elem_classes="nexus-input")
+                manual_transcript = gr.Textbox(label="TRANSCRIPT TEXT", lines=16, placeholder="Paste transcript text here…", elem_classes="nexus-input")
+                manual_button = gr.Button("Import Transcript  ↗", variant="primary", elem_classes="gradient-action")
+                manual_output = gr.Textbox(label="IMPORT STATUS", lines=4, interactive=False)
+
+        with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as management_page:
+            gr.HTML("<div class='page-heading'><div class='eyebrow'>MANAGEMENT</div><h1>Manage Sources</h1><p>Refresh, remove a selected source, or clear the indexed library.</p></div>")
+            with gr.Column(elem_classes="glass-panel source-panel"):
+                gr.Markdown("INDEXED SOURCES", elem_classes="source-selector-label")
+                gr.Markdown("Choose a source to remove.", elem_classes="source-selector-description")
+                manage_scope = gr.Dropdown(choices=scope_choices(), value="", container=False, elem_id="nexus-manage-source-selector", elem_classes=["nexus-input", "nexus-source-selector"])
+                refresh_button = gr.Button("Refresh Sources  ↻", variant="secondary")
+                confirm_actions = gr.Checkbox(label="I understand these actions permanently remove indexed content.", value=False)
+                with gr.Row():
+                    delete_button = gr.Button("Delete Selected Source", variant="secondary")
+                    clear_button = gr.Button("Clear Entire Index", variant="stop", elem_id="clear-entire-index-btn")
+                management_output = gr.Textbox(label="MANAGEMENT STATUS", lines=3, interactive=False)
+
+            index_button.click(index_channel_ui, [channel_input, max_videos_input], [index_output, chat_scope, manage_scope], show_progress="minimal")
+            video_index_button.click(index_video_ui, video_url_input, [video_index_output, chat_scope, manage_scope], show_progress="minimal")
+            pdf_button.click(index_pdf_ui, pdf_input, [pdf_output, chat_scope, manage_scope], show_progress="minimal")
+            website_button.click(index_website_ui, website_input, [website_output, chat_scope, manage_scope], show_progress="minimal")
+            manual_button.click(index_transcript_ui, [manual_url, manual_title, manual_transcript], [manual_output, chat_scope, manage_scope], show_progress="minimal")
+            refresh_button.click(refresh_library_ui, outputs=[chat_scope, manage_scope], queue=False)
+            delete_button.click(delete_source_ui, [manage_scope, confirm_actions], [management_output, chat_scope, manage_scope, confirm_actions], show_progress="minimal")
+            clear_button.click(clear_library_ui, confirm_actions, [management_output, chat_scope, manage_scope, confirm_actions], show_progress="minimal")
+
+    pages = [dashboard_page, chat_page, channel_page, video_page, pdf_page, website_page, transcript_page, management_page]
+    nav_components = [nav_buttons[name] for name in PAGE_NAMES]
+    for nav_name in PAGE_NAMES:
+        nav_buttons[nav_name].click(partial(select_page, nav_name), outputs=pages + nav_components, queue=False)
+    dashboard_channel.click(lambda: select_page("YouTube Channel"), outputs=pages + nav_components, queue=False)
+    dashboard_pdf.click(lambda: select_page("PDF Documents"), outputs=pages + nav_components, queue=False)
+    dashboard_website.click(lambda: select_page("Website Analyzer"), outputs=pages + nav_components, queue=False)
+    dashboard_chat.click(lambda: select_page("AI Chat"), outputs=pages + nav_components, queue=False)
 
 
 if __name__ == "__main__":
@@ -336,4 +425,6 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
+        theme=gr.themes.Base(),
+        css=APP_CSS,
     )
