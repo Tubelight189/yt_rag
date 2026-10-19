@@ -334,7 +334,7 @@ with gr.Blocks(title="NEXUS AI | Intelligent Knowledge Companion") as demo:
             chat_scope = gr.Dropdown(choices=scope_choices(), value="", container=False, elem_id="nexus-source-selector", elem_classes=["nexus-input", "nexus-source-selector"])
             chatbot = gr.Chatbot(label="Conversation", height=490, layout="bubble", autoscroll=True,
                 placeholder="<div class='chat-empty'><div class='chat-empty-icon'>✦</div><h2>Hello! I'm NEXUS AI.</h2><p>Ask me anything about your indexed knowledge sources.</p></div>",
-                elem_classes="nexus-chatbot")
+                elem_id="nexus-chatbot", elem_classes="nexus-chatbot")
             with gr.Row(elem_classes="chat-compose"):
                 msg = gr.Textbox(label="", placeholder="Ask a question about your knowledge…", lines=2, scale=8, elem_classes="nexus-input")
                 with gr.Column(scale=1, min_width=145):
