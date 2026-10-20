@@ -19,7 +19,7 @@ indexing_service = IndexingService()
 chat_service = ChatService()
 
 
-def index_channel(channel_handle: str, max_videos: int = 50) -> str:
+def index_channel(channel_handle: str, max_videos: int = 5) -> str:
     """Index a YouTube channel.
 
     Args:
@@ -349,7 +349,7 @@ with gr.Blocks(title="NEXUS AI | Intelligent Knowledge Companion") as demo:
             with gr.Column(elem_classes="glass-panel source-panel"):
                 gr.HTML("<div class='source-panel-icon cyan-icon'>▶</div><h2>Index a YouTube channel</h2><p>Enter a channel handle and choose how many recent videos to scan.</p>")
                 channel_input = gr.Textbox(label="CHANNEL HANDLE", placeholder="@veritasium", info="Use the channel handle, for example @veritasium.", elem_classes="nexus-input")
-                max_videos_input = gr.Slider(minimum=1, maximum=200, value=50, step=1, label="MAXIMUM VIDEOS")
+                max_videos_input = gr.Slider(minimum=1, maximum=200, value=5, step=1, label="MAXIMUM VIDEOS")
                 index_button = gr.Button("Index Channel  ↗", variant="primary", elem_classes="gradient-action")
                 index_output = gr.Textbox(label="INDEXING STATUS", lines=4, interactive=False)
 
