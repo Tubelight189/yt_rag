@@ -4,7 +4,7 @@ from typing import Any
 
 from src.core.config import Settings
 from src.core.logging import get_logger
-from src.rag.embeddings import LocalEmbedder, OpenAIEmbedder
+from src.rag.embeddings import get_cached_embedder
 from src.rag.generator import AnthropicGenerator, GeminiGenerator, OpenAIGenerator
 from src.rag.retriever import SimpleRetriever
 from src.rag.vectorstore import ChromaVectorStore
@@ -25,10 +25,11 @@ class ChatService(BaseService):
         super().__init__(settings)
 
         # Initialize embedder
-        if not self.settings.should_local_embed:
-            self.embedder = OpenAIEmbedder(api_key=self.settings.openai_api_key)
-        else:
-            self.embedder = LocalEmbedder(model_name=self.settings.embedding_model)
+        self.embedder = get_cached_embedder(
+            self.settings.should_local_embed,
+            self.settings.embedding_model,
+            self.settings.openai_api_key,
+        )
 
         # Initialize vector store
         self.vector_store = ChromaVectorStore(persist_directory=self.settings.chroma_db_path)

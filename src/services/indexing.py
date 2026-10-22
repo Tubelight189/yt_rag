@@ -6,7 +6,7 @@ from src.core.config import Settings
 from src.core.exceptions import IndexingError, TranscriptNotAvailableError
 from src.core.logging import get_logger
 from src.rag.chunker import RecursiveChunker
-from src.rag.embeddings import LocalEmbedder, OpenAIEmbedder
+from src.rag.embeddings import get_cached_embedder
 from src.rag.vectorstore import ChromaVectorStore
 from src.services.base import BaseService
 from src.youtube.client import YouTubeClient
@@ -36,10 +36,11 @@ class IndexingService(BaseService):
         )
 
         # Initialize embedder based on settings
-        if not self.settings.should_local_embed:
-            self.embedder = OpenAIEmbedder(api_key=self.settings.openai_api_key)
-        else:
-            self.embedder = LocalEmbedder(model_name=self.settings.embedding_model)
+        self.embedder = get_cached_embedder(
+            self.settings.should_local_embed,
+            self.settings.embedding_model,
+            self.settings.openai_api_key,
+        )
 
         self.vector_store = ChromaVectorStore(persist_directory=self.settings.chroma_db_path)
 

@@ -1,5 +1,7 @@
 """Embedding generation implementations."""
 
+from functools import lru_cache
+
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 
@@ -109,3 +111,19 @@ class LocalEmbedder(BaseEmbedder):
         except Exception as e:
             logger.error(f"Failed to generate batch embeddings: {e}")
             raise EmbeddingError(f"Failed to generate batch embeddings: {e}")
+
+
+@lru_cache(maxsize=4)
+def get_cached_embedder(
+    use_local: bool,
+    embedding_model: str,
+    openai_api_key: str | None = None,
+) -> BaseEmbedder:
+    """Return one embedder instance per process/configuration.
+
+    The app creates separate indexing and chat services at startup. Caching here
+    prevents those services from loading duplicate SentenceTransformer models.
+    """
+    if use_local:
+        return LocalEmbedder(model_name=embedding_model)
+    return OpenAIEmbedder(api_key=openai_api_key)
