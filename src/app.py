@@ -1,5 +1,5 @@
 """Gradio UI for YouTube RAG system."""
-
+import os
 from pathlib import Path
 from functools import partial
 
@@ -423,7 +423,7 @@ if __name__ == "__main__":
     logger.info("Starting YouTube RAG Gradio app")
     demo.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=int(os.environ.get("PORT", 7860)),
         share=False,
         theme=gr.themes.Base(),
         css=APP_CSS,
