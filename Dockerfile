@@ -11,7 +11,10 @@ ENV PORT=7860
 COPY pyproject.toml ./
 COPY src/ ./src/
 
-RUN pip install --no-cache-dir .
+# RUN python -m pip install --upgrade pip && pip install --no-cache-dir .
+RUN python -m pip install --upgrade pip && \
+    pip install --no-cache-dir --retries 10 --timeout 120 .
+
 
 EXPOSE 7860
 
