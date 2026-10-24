@@ -63,7 +63,7 @@ class GeminiConfigurationTests(unittest.TestCase):
 
     @patch("src.services.chat.ChromaVectorStore")
     @patch("src.services.chat.SimpleRetriever")
-    @patch("src.services.chat.LocalEmbedder")
+    @patch("src.services.chat.get_cached_embedder")
     @patch("src.services.chat.GeminiGenerator")
     def test_chat_service_selects_gemini(
         self, generator_class: Mock, _embedder: Mock, _retriever: Mock, _store: Mock
@@ -71,6 +71,8 @@ class GeminiConfigurationTests(unittest.TestCase):
         settings = SimpleNamespace(
             should_local_embed=True,
             embedding_model="local-model",
+            openai_api_key=None,
+            resolved_embedding_provider=lambda: "local",
             chroma_db_path="data/test",
             llm_provider="gemini",
             gemini_api_key="gemini-key",
@@ -86,6 +88,8 @@ class GeminiConfigurationTests(unittest.TestCase):
         service.settings = SimpleNamespace(
             should_local_embed=True,
             embedding_model="local-model",
+            openai_api_key=None,
+            resolved_embedding_provider=lambda: "local",
             chroma_db_path="data/test",
             llm_provider="gemini",
             gemini_api_key=None,
@@ -93,7 +97,7 @@ class GeminiConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "GEMINI_API_KEY"):
             # Exercise the real constructor branch without initializing unrelated clients.
             with patch("src.services.chat.BaseService.__init__", lambda instance, settings: setattr(instance, "settings", settings)), \
-                 patch("src.services.chat.LocalEmbedder"), patch("src.services.chat.ChromaVectorStore"), \
+                 patch("src.services.chat.get_cached_embedder"), patch("src.services.chat.ChromaVectorStore"), \
                  patch("src.services.chat.SimpleRetriever"):
                 ChatService(settings=service.settings)
 

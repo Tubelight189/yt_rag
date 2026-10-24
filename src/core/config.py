@@ -56,6 +56,10 @@ class Settings(BaseSettings):
         default=False,
         description="Whether to use local embedding model",
     )
+    embedding_provider: str | None = Field(
+        default=None,
+        description="Embedding provider: local or openai; falls back to SHOULD_LOCAL_EMBED",
+    )
     chunk_size: int = Field(default=1000, description="Text chunk size for splitting")
     chunk_overlap: int = Field(default=200, description="Overlap between chunks")
 
@@ -77,6 +81,15 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = Field(default="INFO", description="Logging level")
+
+    def resolved_embedding_provider(self) -> str:
+        """Resolve the explicit provider while preserving the legacy flag."""
+        provider = (self.embedding_provider or "").strip().lower()
+        if not provider:
+            return "local" if self.should_local_embed else "openai"
+        if provider not in {"local", "openai"}:
+            raise ValueError("EMBEDDING_PROVIDER must be 'local' or 'openai'")
+        return provider
 
 
 @lru_cache()

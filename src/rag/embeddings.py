@@ -1,10 +1,9 @@
 """Embedding generation implementations."""
 
 from functools import lru_cache
+from threading import Lock
 
 from openai import OpenAI
-from sentence_transformers import SentenceTransformer
-
 from src.core.config import get_settings
 from src.core.exceptions import EmbeddingError
 from src.core.logging import get_logger
@@ -77,6 +76,10 @@ class LocalEmbedder(BaseEmbedder):
         """
         settings = get_settings()
         self.model_name = model_name or settings.embedding_model
+        # Importing SentenceTransformers also imports the PyTorch stack. Keep
+        # that work out of application startup until a local embedding is used.
+        from sentence_transformers import SentenceTransformer
+
         self.model = SentenceTransformer(self.model_name)
         logger.info(f"Initialized local embedder with model {self.model_name}")
 
@@ -106,11 +109,38 @@ class LocalEmbedder(BaseEmbedder):
             List of embedding vectors
         """
         try:
-            embeddings = self.model.encode(texts, convert_to_numpy=True)
+            # embeddings = self.model.encode(texts, convert_to_numpy=True)
+            embeddings = self.model.encode(
+                texts,
+                batch_size=8,
+                convert_to_numpy=True,
+            )
             return embeddings.tolist()
         except Exception as e:
             logger.error(f"Failed to generate batch embeddings: {e}")
             raise EmbeddingError(f"Failed to generate batch embeddings: {e}")
+
+
+class LazyLocalEmbedder(BaseEmbedder):
+    """Thread-safe proxy that loads one local model on first use."""
+
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+        self._embedder: LocalEmbedder | None = None
+        self._lock = Lock()
+
+    def _get_embedder(self) -> LocalEmbedder:
+        if self._embedder is None:
+            with self._lock:
+                if self._embedder is None:
+                    self._embedder = LocalEmbedder(model_name=self.model_name)
+        return self._embedder
+
+    def embed_text(self, text: str) -> list[float]:
+        return self._get_embedder().embed_text(text)
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return self._get_embedder().embed_batch(texts)
 
 
 @lru_cache(maxsize=4)
@@ -122,8 +152,9 @@ def get_cached_embedder(
     """Return one embedder instance per process/configuration.
 
     The app creates separate indexing and chat services at startup. Caching here
-    prevents those services from loading duplicate SentenceTransformer models.
+    shares one lazy local embedder proxy, and the proxy loads its model only on
+    first embedding use.
     """
     if use_local:
-        return LocalEmbedder(model_name=embedding_model)
+        return LazyLocalEmbedder(model_name=embedding_model)
     return OpenAIEmbedder(api_key=openai_api_key)

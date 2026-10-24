@@ -1,6 +1,6 @@
 # YouTube RAG Assistant — Multi-Source AI Learning Assistant
 
-This Python/Gradio project is a Retrieval-Augmented Generation (RAG) assistant for questions about indexed learning resources. It supports YouTube channels and videos, authorized manual transcripts, text PDFs, and individual public webpages. Content is extracted, chunked, embedded, stored in persistent ChromaDB, retrieved semantically, and supplied to a configurable LLM, including Gemini.
+QueryWise is an AI-Powered YouTube Search and Question Answering application built with Python and Gradio. It is a Retrieval-Augmented Generation (RAG) assistant for questions about indexed learning resources. It supports YouTube channels and videos, authorized manual transcripts, text PDFs, and individual public webpages. Content is extracted, chunked, embedded, stored in persistent ChromaDB, retrieved semantically, and supplied to a configurable LLM, including Gemini.
 
 This document describes the implementation currently present in the repository. It does not claim live-service success, benchmark results, or complete end-to-end validation where the current environment cannot provide them.
 
@@ -134,6 +134,12 @@ The dropdown maps readable labels to IDs for usability. Isolation is enforced by
 
 `RecursiveChunker` defaults to `CHUNK_SIZE=1000` and `CHUNK_OVERLAP=200`. It splits by paragraphs, lines, sentences, words, and characters as needed. Local embeddings use `sentence-transformers/all-MiniLM-L6-v2` when `SHOULD_LOCAL_EMBED=true`; otherwise the configured OpenAI embedder is used. ChromaDB performs cosine-distance search. `RETRIEVAL_K` defaults to 5. Filtering restricts the candidate set before semantic ranking.
 
+### Embedding providers and collections
+
+Set `EMBEDDING_PROVIDER=local` for local development, or `EMBEDDING_PROVIDER=openai` with `OPENAI_API_KEY` for remote embeddings. If `EMBEDDING_PROVIDER` is omitted, the legacy `SHOULD_LOCAL_EMBED` setting remains the selector (`true` means local; `false` means OpenAI). Remote embedding requests are not assumed to be free and are subject to the provider's account and pricing terms.
+
+Local embeddings use the existing `youtube_rag` Chroma collection and produce 384-dimensional vectors. OpenAI embeddings use the separate `youtube_rag_openai` collection and the current `text-embedding-3-small` implementation (1536 dimensions). The application checks the selected collection's stored vector dimension before use. Changing providers does not convert existing vectors; content must be indexed into the selected collection before remote retrieval can return results.
+
 ## Gemini integration
 
 `GeminiGenerator` creates `google.genai.Client(api_key=GEMINI_API_KEY)` and calls `models.generate_content` with retrieved context and the question. Missing configuration raises an explanatory error; provider failures are logged and returned through the chat error path. No formal grounding or accuracy benchmark is included.
@@ -149,7 +155,7 @@ python -m venv venv
 .\venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e .
-Copy-Item .env.example .env
+New-Item .env -ItemType File
 notepad .env
 ```
 
@@ -182,6 +188,54 @@ Run the app:
 ```
 
 Open `http://127.0.0.1:7860`; stop with `Ctrl+C`. `YOUTUBE_OAUTH_TOKEN_FILE` is optional and is only for the official captions path when the account can edit the video.
+
+There is currently no `.env.example` file in the repository. Create `.env` locally using the configuration reference below, and never commit it.
+
+## Configuration reference
+
+| Variable | Purpose | Required | Default |
+|---|---|---:|---|
+| `YOUTUBE_API_KEY` | YouTube Data API metadata access | Yes | unset |
+| `YOUTUBE_OAUTH_TOKEN_FILE` | Optional OAuth token for editable-video captions | No | unset |
+| `OPENAI_API_KEY` | OpenAI generation or embeddings | Conditional | unset |
+| `ANTHROPIC_API_KEY` | Anthropic generation | Conditional | unset |
+| `GEMINI_API_KEY` | Gemini generation | Conditional | unset |
+| `GEMINI_MODEL` | Gemini model | No | `gemini-3.8-flash` |
+| `LLM_PROVIDER` | `openai`, `anthropic`, or `gemini` | No | `openai` |
+| `LLM_MODEL` | OpenAI model name | No | `gpt-4` |
+| `EMBEDDING_PROVIDER` | `local` or `openai` | No | derived from `SHOULD_LOCAL_EMBED` |
+| `SHOULD_LOCAL_EMBED` | Legacy local embedding switch | No | `false` |
+| `EMBEDDING_MODEL` | Local embedding model | No | `sentence-transformers/all-MiniLM-L6-v2` |
+| `CHROMA_DB_PATH` | Persistent ChromaDB directory | No | `./data/chroma_db` |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | Chunking parameters | No | `1000` / `200` |
+| `RETRIEVAL_K` | Number of retrieved chunks | No | `5` |
+| `LOG_LEVEL` | Logging level | No | `INFO` |
+
+Choose one implemented LLM provider and supply its corresponding key. Local embeddings avoid an embedding API key; OpenAI embeddings require `OPENAI_API_KEY`.
+
+## Running with Docker
+
+Prerequisite: Docker Desktop. The image listens on container port `7860`; the host port is the number on the left side of `-p`.
+
+```powershell
+docker build -t querywise:latest .
+docker run -d --name querywise-app -p 7860:7860 --env-file .env querywise:latest
+docker logs -f querywise-app
+```
+
+Open `http://localhost:7860`. To use host port `8080`, run `-p 8080:7860`; the container port remains `7860`.
+
+```powershell
+docker ps
+docker ps -a
+docker stop querywise-app
+docker start querywise-app
+docker logs querywise-app
+docker images
+docker rm querywise-app
+```
+
+The host `.env` must not be committed. ChromaDB is stored at `/app/data/chroma_db`; the Dockerfile does not declare a volume, so data is not guaranteed to survive container removal. Mount a host directory when persistence is needed: `-v "${PWD}\data:/app/data"`. For startup or port conflicts, inspect `docker logs querywise-app`, verify provider keys, and check the host port with `Get-NetTCPConnection -LocalPort 7860`.
 
 ## User guide
 

@@ -21,6 +21,7 @@ class ChromaVectorStore(BaseVectorStore):
         self,
         collection_name: str = "youtube_rag",
         persist_directory: Path | None = None,
+        expected_dimension: int | None = None,
     ) -> None:
         """Initialize ChromaDB vector store.
 
@@ -44,12 +45,27 @@ class ChromaVectorStore(BaseVectorStore):
                 name=collection_name,
                 metadata={"hnsw:space": "cosine"},
             )
+            if expected_dimension is not None:
+                self._validate_embedding_dimension(expected_dimension)
             logger.info(
                 f"Initialized ChromaDB collection '{collection_name}' at {self.persist_directory}"
             )
         except Exception as e:
             logger.error(f"Failed to initialize ChromaDB: {e}")
             raise VectorStoreError(f"Failed to initialize ChromaDB: {e}")
+
+    def _validate_embedding_dimension(self, expected_dimension: int) -> None:
+        """Validate one stored vector without loading the collection."""
+        sample = self.collection.get(limit=1, include=["embeddings"])
+        embeddings = sample.get("embeddings")
+        if embeddings is not None and len(embeddings) > 0:
+            actual_dimension = len(embeddings[0])
+            if actual_dimension != expected_dimension:
+                raise VectorStoreError(
+                    f"Collection '{self.collection_name}' contains {actual_dimension}-dimensional "
+                    f"vectors, but the selected embedding provider requires {expected_dimension}. "
+                    "Use the matching collection or re-index into a new collection."
+                )
 
     def add_documents(
         self,
@@ -127,6 +143,16 @@ class ChromaVectorStore(BaseVectorStore):
 
     def delete_source(self, source_id: str) -> None:
         self.collection.delete(where={"source_id": source_id})
+
+    def get_source_ids(self, source_id: str) -> set[str]:
+        """Return IDs for a source without loading documents or embeddings."""
+        result = self.collection.get(where={"source_id": source_id}, include=[])
+        return set(result.get("ids", []))
+
+    def delete_ids(self, ids: list[str]) -> None:
+        """Delete explicitly selected records, avoiding a broad source delete."""
+        if ids:
+            self.collection.delete(ids=ids)
 
     def list_sources(self) -> list[dict[str, Any]]:
         result = self.collection.get(include=["metadatas"])

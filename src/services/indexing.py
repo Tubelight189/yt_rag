@@ -20,6 +20,10 @@ logger = get_logger(__name__)
 class IndexingService(BaseService):
     """Service for indexing YouTube channel content."""
 
+    # Keep both embedding inference and each Chroma upsert bounded.  This is
+    # deliberately independent of the model's internal encode batch size.
+    INDEX_BATCH_SIZE = 8
+
     def __init__(self, settings: Settings | None = None) -> None:
         """Initialize the indexing service.
 
@@ -36,13 +40,19 @@ class IndexingService(BaseService):
         )
 
         # Initialize embedder based on settings
+        embedding_provider = self.settings.resolved_embedding_provider()
         self.embedder = get_cached_embedder(
-            self.settings.should_local_embed,
+            embedding_provider == "local",
             self.settings.embedding_model,
             self.settings.openai_api_key,
         )
 
-        self.vector_store = ChromaVectorStore(persist_directory=self.settings.chroma_db_path)
+        collection_name = "youtube_rag" if embedding_provider == "local" else "youtube_rag_openai"
+        self.vector_store = ChromaVectorStore(
+            collection_name=collection_name,
+            persist_directory=self.settings.chroma_db_path,
+            expected_dimension=384 if embedding_provider == "local" else 1536,
+        )
 
     def index_channel(
         self, channel_handle: str, max_videos: int = 50
@@ -97,17 +107,10 @@ class IndexingService(BaseService):
                     # Chunk the transcript
                     chunks = self.chunker.chunk_text(transcript, metadata=metadata)
 
-                    # Generate embeddings
-                    chunk_texts = [chunk["text"] for chunk in chunks]
-                    embeddings = self.embedder.embed_batch(chunk_texts)
-
-                    # Store in vector database
-                    chunk_metadatas = [chunk["metadata"] for chunk in chunks]
-                    self.vector_store.add_documents(
-                        texts=chunk_texts,
-                        embeddings=embeddings,
-                        metadatas=chunk_metadatas,
-                        ids=[f"youtube:{video['video_id']}:{i}" for i in range(len(chunks))],
+                    self._index_chunks(
+                        chunks,
+                        source_id=f"youtube:{video['video_id']}",
+                        replace=True,
                     )
 
                     total_chunks += len(chunks)
@@ -154,32 +157,59 @@ class IndexingService(BaseService):
                 "published_at": video.get("published_at", ""),
             }
             chunks = self.chunker.chunk_text(transcript, metadata=metadata)
-            self.vector_store.add_documents(
-                texts=[chunk["text"] for chunk in chunks],
-                embeddings=self.embedder.embed_batch([chunk["text"] for chunk in chunks]),
-                metadatas=[chunk["metadata"] for chunk in chunks],
-                ids=[f"youtube:{video_id}:{i}" for i in range(len(chunks))],
-            )
+            self._index_chunks(chunks, source_id=f"youtube:{video_id}", replace=True)
             return {"video_id": video_id, "video_title": video["title"], "total_chunks": len(chunks)}
         except Exception as error:
             if isinstance(error, IndexingError):
                 raise
             raise IndexingError(f"Failed to index video: {error}") from error
 
-    def _index_texts(self, texts: list[str], metadata: dict[str, Any], source_id: str) -> int:
+    def _index_texts(
+        self,
+        texts: list[str],
+        metadata: dict[str, Any],
+        source_id: str,
+        replace: bool = False,
+    ) -> int:
         chunks = []
         for text in texts:
             chunks.extend(self.chunker.chunk_text(text, metadata=metadata))
         if not chunks:
             raise IndexingError("Source did not produce any chunks")
-        chunk_texts = [chunk["text"] for chunk in chunks]
-        self.vector_store.add_documents(
-            texts=chunk_texts,
-            embeddings=self.embedder.embed_batch(chunk_texts),
-            metadatas=[chunk["metadata"] for chunk in chunks],
-            ids=[f"{source_id}:{i}" for i in range(len(chunks))],
-        )
+        self._index_chunks(chunks, source_id=source_id, replace=replace)
         return len(chunks)
+
+    def _index_chunks(
+        self,
+        chunks: list[dict[str, Any]],
+        source_id: str,
+        replace: bool = False,
+    ) -> None:
+        """Embed and persist chunks in bounded batches.
+
+        IDs retain their source-relative ordinal, so re-indexing continues to
+        upsert the same records.  The caller owns source replacement/deletion
+        semantics; this helper only limits temporary batch memory.
+        """
+        old_ids = self.vector_store.get_source_ids(source_id) if replace else set()
+        new_ids: set[str] = set()
+        try:
+            for start in range(0, len(chunks), self.INDEX_BATCH_SIZE):
+                batch = chunks[start : start + self.INDEX_BATCH_SIZE]
+                texts = [chunk["text"] for chunk in batch]
+                batch_ids = [f"{source_id}:{start + offset}" for offset in range(len(batch))]
+                self.vector_store.add_documents(
+                    texts=texts,
+                    embeddings=self.embedder.embed_batch(texts),
+                    metadatas=[chunk["metadata"] for chunk in batch],
+                    ids=batch_ids,
+                )
+                new_ids.update(batch_ids)
+        except Exception:
+            # Do not remove old records when a later batch fails.
+            raise
+        if replace:
+            self.vector_store.delete_ids(sorted(old_ids - new_ids))
 
     def index_pdf(self, file_path: str, source_name: str | None = None) -> dict[str, Any]:
         try:
@@ -198,9 +228,8 @@ class IndexingService(BaseService):
         try:
             page = fetch_website(url)
             source_id = stable_source_id("website", page["url"])
-            self.vector_store.delete_source(source_id)
             metadata = {"source_id": source_id, "source_type": "website", "workspace_id": "default", "source_name": page["title"], "source_url": page["url"]}
-            count = self._index_texts([page["text"]], metadata, source_id)
+            count = self._index_texts([page["text"]], metadata, source_id, replace=True)
             return {"source_id": source_id, "source_name": page["title"], "total_chunks": count, "source_url": page["url"]}
         except Exception as error:
             raise IndexingError(f"Failed to index website: {error}") from error
@@ -249,14 +278,7 @@ class IndexingService(BaseService):
             chunks = self.chunker.chunk_text(transcript.strip(), metadata=metadata)
             if not chunks:
                 raise IndexingError("Transcript did not produce any chunks")
-            texts = [chunk["text"] for chunk in chunks]
-            embeddings = self.embedder.embed_batch(texts)
-            self.vector_store.add_documents(
-                texts=texts,
-                embeddings=embeddings,
-                metadatas=[chunk["metadata"] for chunk in chunks],
-                ids=[f"{metadata['source_id']}:{i}" for i in range(len(chunks))],
-            )
+            self._index_chunks(chunks, source_id=metadata["source_id"], replace=True)
             stats = {
                 "channel_name": metadata["channel_name"],
                 "channel_id": metadata["channel_id"],

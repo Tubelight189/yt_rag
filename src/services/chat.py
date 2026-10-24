@@ -25,14 +25,20 @@ class ChatService(BaseService):
         super().__init__(settings)
 
         # Initialize embedder
+        embedding_provider = self.settings.resolved_embedding_provider()
         self.embedder = get_cached_embedder(
-            self.settings.should_local_embed,
+            embedding_provider == "local",
             self.settings.embedding_model,
             self.settings.openai_api_key,
         )
 
         # Initialize vector store
-        self.vector_store = ChromaVectorStore(persist_directory=self.settings.chroma_db_path)
+        collection_name = "youtube_rag" if embedding_provider == "local" else "youtube_rag_openai"
+        self.vector_store = ChromaVectorStore(
+            collection_name=collection_name,
+            persist_directory=self.settings.chroma_db_path,
+            expected_dimension=384 if embedding_provider == "local" else 1536,
+        )
 
         # Initialize retriever
         self.retriever = SimpleRetriever(

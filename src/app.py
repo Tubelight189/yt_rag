@@ -277,12 +277,12 @@ with (Path(__file__).resolve().parent / "assets" / "styles.css").open(encoding="
     APP_CSS = css_file.read()
 
 
-with gr.Blocks(title="NEXUS AI | Intelligent Knowledge Companion") as demo:
+with gr.Blocks(title="QueryWise | AI-Powered YouTube Search and Question Answering") as demo:
     with gr.Sidebar(position="left", width=270, elem_id="nexus-sidebar"):
         with gr.Column(elem_classes="sidebar-navigation"):
             gr.HTML("""
                 <div class="brand-lockup"><div class="brand-symbol"><span>✦</span></div>
-                <div><div class="brand-name">NEXUS <span>AI</span></div><div class="brand-subtitle">KNOWLEDGE, CONNECTED</div></div></div>
+                <div><div class="brand-name">Query<span>Wise</span></div><div class="brand-subtitle">KNOWLEDGE, CONNECTED</div></div></div>
             """)
             gr.Markdown("MAIN", elem_classes="nav-section-label")
             nav_buttons = {}
@@ -305,7 +305,7 @@ with gr.Blocks(title="NEXUS AI | Intelligent Knowledge Companion") as demo:
                   </div><div class="hero-orbit" aria-hidden="true"><div class="orbit-ring ring-one"></div><div class="orbit-ring ring-two"></div><div class="orbit-core">✦</div><i class="orbit-node node-one"></i><i class="orbit-node node-two"></i><i class="orbit-node node-three"></i></div>
                 </section>
             """)
-            gr.Markdown("###      Welcome to NEXUS AI\nYour AI-powered workspace for intelligent content exploration.", elem_classes="welcome-copy")
+            gr.Markdown("###      Welcome to QueryWise\nYour AI-powered workspace for intelligent content exploration.", elem_classes="welcome-copy")
             with gr.Row(elem_classes="overview-row"):
                 with gr.Column(scale=3, elem_classes="source-count-card"):
                     gr.Markdown("**KNOWLEDGE LIBRARY**")
@@ -328,12 +328,12 @@ with gr.Blocks(title="NEXUS AI | Intelligent Knowledge Companion") as demo:
                     dashboard_chat = gr.Button("Start a conversation  ↗", variant="secondary")
 
         with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as chat_page:
-            gr.HTML("<div class='page-heading'><div class='eyebrow'>NEXUS CONVERSATION</div><h1>AI Knowledge Chat</h1><p>Explore your indexed sources with grounded answers and references.</p></div>")
+            gr.HTML("<div class='page-heading'><div class='eyebrow'>QUERYWISE CONVERSATION</div><h1>AI Knowledge Chat</h1><p>Explore your indexed sources with grounded answers and references.</p></div>")
             gr.Markdown("RETRIEVAL SCOPE", elem_classes="source-selector-label")
             gr.Markdown("Search across all sources or focus on one.", elem_classes="source-selector-description")
             chat_scope = gr.Dropdown(choices=scope_choices(), value="", container=False, elem_id="nexus-source-selector", elem_classes=["nexus-input", "nexus-source-selector"])
             chatbot = gr.Chatbot(label="Conversation", height=490, layout="bubble", autoscroll=True,
-                placeholder="<div class='chat-empty'><div class='chat-empty-icon'>✦</div><h2>Hello! I'm NEXUS AI.</h2><p>Ask me anything about your indexed knowledge sources.</p></div>",
+                placeholder="<div class='chat-empty'><div class='chat-empty-icon'>✦</div><h2>Hello! I'm QueryWise.</h2><p>Ask me anything about your indexed knowledge sources.</p></div>",
                 elem_id="nexus-chatbot", elem_classes="nexus-chatbot")
             with gr.Row(elem_classes="chat-compose"):
                 msg = gr.Textbox(label="", placeholder="Ask a question about your knowledge…", lines=2, scale=8, elem_classes="nexus-input")
@@ -372,7 +372,7 @@ with gr.Blocks(title="NEXUS AI | Intelligent Knowledge Companion") as demo:
         with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as website_page:
             gr.HTML("<div class='page-heading'><div class='eyebrow'>KNOWLEDGE SOURCES / WEB</div><h1>Website Analyzer</h1><p>Make an individual public webpage part of your searchable knowledge.</p></div>")
             with gr.Column(elem_classes="glass-panel source-panel"):
-                gr.HTML("<div class='source-panel-icon blue-icon'>◎</div><h2>Analyze a webpage</h2><p>Add an article or public webpage to the NEXUS knowledge space.</p>")
+                gr.HTML("<div class='source-panel-icon blue-icon'>◎</div><h2>Analyze a webpage</h2><p>Add an article or public webpage to the QueryWise knowledge space.</p>")
                 website_input = gr.Textbox(label="PUBLIC WEBSITE URL", placeholder="https://example.com/article", elem_classes="nexus-input")
                 website_button = gr.Button("Analyze Website  ↗", variant="primary", elem_classes="gradient-action")
                 website_output = gr.Textbox(label="ANALYSIS STATUS", lines=4, interactive=False)
@@ -424,7 +424,7 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("PORT", 7860)),
-        share=False,
+        share=True,
         theme=gr.themes.Base(),
         css=APP_CSS,
     )
