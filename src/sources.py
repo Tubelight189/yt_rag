@@ -1,4 +1,4 @@
-""""Safe extractors for non-YouTube sources."""
+"""Safe extractors for non-YouTube sources."""
 from hashlib import sha256
 from ipaddress import ip_address
 from urllib.parse import urljoin, urlparse, urlunparse
