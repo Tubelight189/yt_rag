@@ -118,9 +118,12 @@ class ChromaVectorStore(BaseVectorStore):
         """
         try:
             query_args = {"query_embeddings": [query_embedding], "n_results": k}
-            if video_id:
+            if video_id and where:
+                query_args["where"] = {"$and": [{"video_id": video_id}, where]}
+            elif video_id:
                 query_args["where"] = {"video_id": video_id}
-            elif where:
+            elif where is not None:
+                # An explicit metadata filter must never be dropped.
                 query_args["where"] = where
             results = self.collection.query(**query_args)
 
