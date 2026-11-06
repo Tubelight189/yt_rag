@@ -1,6 +1,7 @@
 """Indexing service for processing and storing YouTube content."""
 
 from typing import Any
+from pathlib import Path
 
 from src.core.config import Settings
 from src.core.exceptions import IndexingError, TranscriptNotAvailableError
@@ -214,13 +215,23 @@ class IndexingService(BaseService):
     def index_pdf(self, file_path: str, source_name: str | None = None) -> dict[str, Any]:
         try:
             pages = extract_pdf(file_path)
-            name = source_name or file_path.split("\\")[-1]
+            name = source_name or Path(file_path).name
             source_id = stable_source_id("pdf", name)
-            self.vector_store.delete_source(source_id)
-            count = 0
+            chunks = []
             for page in pages:
-                count += self._index_texts([page["text"]], {"source_id": source_id, "source_type": "pdf", "workspace_id": "default", "source_name": name, "page_number": page["page_number"]}, source_id + f":page{page['page_number']}")
-            return {"source_id": source_id, "source_name": name, "total_chunks": count}
+                metadata = {
+                    "source_id": source_id,
+                    "source_type": "pdf",
+                    "workspace_id": "default",
+                    "source_name": name,
+                    "page_number": page["page_number"],
+                }
+                chunks.extend(self.chunker.chunk_text(page["text"], metadata=metadata))
+            if not chunks:
+                raise IndexingError("PDF did not produce any chunks")
+            # Keep old chunks until every replacement batch has succeeded.
+            self._index_chunks(chunks, source_id=source_id, replace=True)
+            return {"source_id": source_id, "source_name": name, "total_chunks": len(chunks)}
         except Exception as error:
             raise IndexingError(f"Failed to index PDF: {error}") from error
 
