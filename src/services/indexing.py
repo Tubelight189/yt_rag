@@ -13,6 +13,10 @@ from src.youtube.client import YouTubeClient
 from src.youtube.videos import parse_video_id
 from src.sources import extract_pdf, fetch_website, stable_source_id, normalize_url
 from hashlib import sha256
+import json
+from pathlib import Path
+from src.rag.generator import GeminiGenerator
+from src.youtube.channel import normalize_channel_handle
 
 logger = get_logger(__name__)
 
@@ -53,6 +57,42 @@ class IndexingService(BaseService):
             persist_directory=self.settings.chroma_db_path,
             expected_dimension=384 if embedding_provider == "local" else 1536,
         )
+        self.channel_registry_path = Path(self.settings.chroma_db_path).parent / "youtube_channels.json"
+
+    def _channels(self) -> dict[str, Any]:
+        try:
+            return json.loads(self.channel_registry_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _save_channel(self, record: dict[str, Any]) -> None:
+        self.channel_registry_path.parent.mkdir(parents=True, exist_ok=True)
+        channels = self._channels()
+        channels[record["channel_id"]] = record
+        self.channel_registry_path.write_text(json.dumps(channels, indent=2), encoding="utf-8")
+
+    def _generate_channel_profile(self, record: dict[str, Any], transcripts: list[str]) -> None:
+        settings = getattr(self, "settings", None)
+        if not transcripts or not getattr(settings, "gemini_api_key", None):
+            return
+        try:
+            generator = GeminiGenerator(model=settings.gemini_model, api_key=settings.gemini_api_key)
+            # Keep profile requests bounded while still including evidence from every indexed video.
+            evidence = "\n\n".join(t[:6000] for t in transcripts)
+            prompt = ("Analyze this YouTube channel as a whole. Identify its general content category, "
+                      "recurring topics, themes, presentation style, and useful observations. "
+                      "Base conclusions only on the indexed transcripts, say when evidence is insufficient, "
+                      "and do not summarize videos separately.\n\n" + evidence)
+            profile = generator.generate("Create the overall channel content profile.", [prompt])
+            source_id = f"youtube_channel:{record['channel_id']}"
+            metadata = {"source_id": source_id, "source_type": "youtube_channel", "workspace_id": "default",
+                        "source_name": record["channel_name"], "channel_id": record["channel_id"],
+                        "channel_handle": record["handle"], "channel_name": record["channel_name"]}
+            chunks = self.chunker.chunk_text(profile, metadata=metadata)
+            self._index_chunks(chunks, source_id=source_id, replace=True)
+            record["profile"] = profile
+        except Exception as error:
+            logger.warning("Channel profile generation failed; video chunks remain indexed: %s", error)
 
     def index_channel(
         self, channel_handle: str, max_videos: int = 50
@@ -85,6 +125,8 @@ class IndexingService(BaseService):
             total_chunks = 0
             videos_indexed = 0
             videos_skipped = 0
+            videos_failed = 0
+            transcripts = []
 
             for video in videos:
                 try:
@@ -100,6 +142,8 @@ class IndexingService(BaseService):
                         "video_id": video["video_id"],
                         "video_title": video["title"],
                         "channel_id": channel_id,
+                        "channel_handle": normalize_channel_handle(channel_handle),
+                        "channel_source_id": f"youtube_channel:{channel_id}",
                         "channel_name": channel_info["title"],
                         "published_at": video["published_at"],
                     }
@@ -115,6 +159,7 @@ class IndexingService(BaseService):
 
                     total_chunks += len(chunks)
                     videos_indexed += 1
+                    transcripts.append(transcript)
                     logger.info(
                         f"Indexed video: {video['title']} ({len(chunks)} chunks)"
                     )
@@ -125,12 +170,27 @@ class IndexingService(BaseService):
                     )
                     videos_skipped += 1
                     continue
+                except Exception as error:
+                    logger.exception("Failed to index video %s", video.get("video_id"))
+                    videos_failed += 1
 
+            record = {"channel_id": channel_id, "handle": normalize_channel_handle(channel_handle),
+                      "channel_name": channel_info["title"], "description": channel_info.get("description", ""),
+                      "channel_url": f"https://www.youtube.com/channel/{channel_id}",
+                      "videos": [{"video_id": v["video_id"], "title": v["title"]} for v in videos],
+                      "videos_discovered": len(videos), "videos_indexed": videos_indexed,
+                      "videos_skipped": videos_skipped, "videos_failed": videos_failed,
+                      "total_chunks": total_chunks}
+            self._generate_channel_profile(record, transcripts)
+            self._save_channel(record)
             stats = {
+                "channel_handle": record["handle"],
                 "channel_name": channel_info["title"],
                 "channel_id": channel_id,
                 "videos_indexed": videos_indexed,
                 "videos_skipped": videos_skipped,
+                "videos_failed": videos_failed,
+                "videos_discovered": len(videos),
                 "total_chunks": total_chunks,
             }
 
@@ -252,8 +312,8 @@ class IndexingService(BaseService):
     def index_transcript(
         self,
         transcript: str,
-        video_id: str = "manual-transcript",
-        video_title: str = "Manually supplied transcript",
+        video_id: str | None = None,
+        video_title: str | None = None,
         channel_name: str = "Manual import",
     ) -> dict[str, Any]:
         """Index transcript text supplied through an authorized user workflow.
@@ -266,10 +326,12 @@ class IndexingService(BaseService):
             raise IndexingError("Transcript text is empty")
 
         try:
+            stable_id = video_id.strip() if video_id else sha256(transcript.strip().encode()).hexdigest()[:16]
+            title = video_title.strip() if video_title else "Manual Transcript"
             metadata = {
-                "source_id": f"manual_transcript:{video_id.strip() or 'manual-transcript'}", "source_type": "manual_transcript", "workspace_id": "default", "source_name": video_title.strip() or "Manually supplied transcript",
-                "video_id": video_id.strip() or "manual-transcript",
-                "video_title": video_title.strip() or "Manually supplied transcript",
+                "source_id": f"manual_transcript:{stable_id}", "source_type": "manual_transcript", "workspace_id": "default", "source_name": title,
+                "video_id": stable_id,
+                "video_title": title,
                 "channel_id": "manual-import",
                 "channel_name": channel_name.strip() or "Manual import",
                 "published_at": "manual-import",

@@ -1,6 +1,9 @@
 """Chat service for querying indexed content."""
 
 from typing import Any
+import json
+import re
+from pathlib import Path
 
 from src.core.config import Settings
 from src.core.logging import get_logger
@@ -45,6 +48,7 @@ class ChatService(BaseService):
             embedder=self.embedder,
             vector_store=self.vector_store,
         )
+        self.channel_registry_path = Path(self.settings.chroma_db_path).parent / "youtube_channels.json"
 
         # Initialize generator based on provider
         provider = self.settings.llm_provider.lower()
@@ -95,8 +99,25 @@ class ChatService(BaseService):
         try:
             logger.info(f"Processing question: {question}")
 
-            # Retrieve relevant documents
-            documents = self.retriever.retrieve(question, k=k, video_id=video_id, where={"source_id": source_id} if source_id else None)
+            channel = None
+            match = re.search(r"(?<!\w)(@[A-Za-z0-9._-]+)", question)
+            if match:
+                try:
+                    channels = json.loads(self.channel_registry_path.read_text(encoding="utf-8"))
+                except (FileNotFoundError, json.JSONDecodeError):
+                    channels = {}
+                handle = match.group(1).lower()
+                channel = next((c for c in channels.values() if c.get("handle", "").lower() == handle), None)
+                if channel:
+                    where = {"channel_id": channel["channel_id"]}
+                    documents = self.retriever.retrieve(question, k=k, where=where)
+                    profile = self.vector_store.search(self.embedder.embed_text("overall channel profile"), k=2,
+                                                       where={"source_id": f"youtube_channel:{channel['channel_id']}"})
+                    documents += [{"text": t, "score": s, "metadata": m} for t, s, m in profile]
+                else:
+                    return {"answer": f"{match.group(1)} is not indexed yet. Index the channel first.", "sources": []}
+            else:
+                documents = self.retriever.retrieve(question, k=k, video_id=video_id, where={"source_id": source_id} if source_id else None)
 
             if not documents:
                 return {

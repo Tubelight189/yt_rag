@@ -1,6 +1,7 @@
 """Channel fetching functionality."""
 
 from typing import Any
+from urllib.parse import urlparse
 
 from googleapiclient.errors import HttpError
 
@@ -8,6 +9,15 @@ from src.core.exceptions import YouTubeAPIError
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def normalize_channel_handle(value: str) -> str:
+    """Return a stable, displayable handle for a handle or YouTube channel URL."""
+    value = (value or "").strip()
+    if "youtube.com" in value.lower():
+        path = urlparse(value).path.strip("/").split("/")
+        value = path[0] if path else value
+    return "@" + value.lstrip("@/")
 
 
 class ChannelFetcher:
@@ -34,8 +44,13 @@ class ChannelFetcher:
             YouTubeAPIError: If channel not found or API error occurs
         """
         try:
+            normalized = (channel_handle or "").strip()
+            parsed = urlparse(normalized)
+            parts = parsed.path.strip("/").split("/")
+            if parsed.netloc.lower().endswith("youtube.com") and len(parts) >= 2 and parts[0] == "channel":
+                return parts[1]
             # Remove @ if present
-            handle = channel_handle.lstrip("@")
+            handle = normalize_channel_handle(channel_handle).lstrip("@")
 
             request = self.youtube.channels().list(part="id", forHandle=handle)
             response = request.execute()

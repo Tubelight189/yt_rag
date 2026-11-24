@@ -118,11 +118,10 @@ def index_website(url: str) -> str:
         return f"Error: {error}"
 
 
-def index_manual_transcript(video_url: str, video_title: str, transcript: str) -> str:
+def index_manual_transcript(transcript: str) -> str:
     """Index user-provided, authorized transcript text through the RAG pipeline."""
     try:
-        video_id = video_url.strip().split("v=")[-1].split("&")[0] if video_url.strip() else "manual-transcript"
-        stats = indexing_service.index_transcript(transcript, video_id, video_title)
+        stats = indexing_service.index_transcript(transcript)
         return (
             f"Transcript indexed successfully. Videos Indexed: {stats['videos_indexed']}; "
             f"Total Chunks: {stats['total_chunks']}"
@@ -221,8 +220,8 @@ def index_website_ui(url: str):
     return index_website(url), *refresh_scope_pair()
 
 
-def index_transcript_ui(url: str, title: str, transcript: str):
-    return index_manual_transcript(url, title, transcript), *refresh_scope_pair()
+def index_transcript_ui(transcript: str):
+    return index_manual_transcript(transcript), *refresh_scope_pair()
 
 
 def refresh_library_ui():
@@ -380,9 +379,7 @@ with gr.Blocks(title="QueryWise | AI-Powered YouTube Search and Question Answeri
         with gr.Group(visible=False, elem_classes=["page-view", "nexus-page-background"]) as transcript_page:
             gr.HTML("<div class='page-heading'><div class='eyebrow'>KNOWLEDGE SOURCES / IMPORT</div><h1>Transcript Import</h1><p>Use transcript text you are authorized to add to your searchable library.</p></div>")
             with gr.Column(elem_classes="glass-panel source-panel transcript-panel"):
-                gr.HTML("<div class='source-panel-icon violet-icon'>≋</div><h2>Import a transcript</h2><p>Add optional video details, then paste the transcript below.</p>")
-                manual_url = gr.Textbox(label="YOUTUBE VIDEO URL · OPTIONAL", placeholder="https://www.youtube.com/watch?v=…", elem_classes="nexus-input")
-                manual_title = gr.Textbox(label="VIDEO TITLE · OPTIONAL", placeholder="Lecture 01 — Introduction", elem_classes="nexus-input")
+                gr.HTML("<div class='source-panel-icon violet-icon'>≋</div><h2>Import a transcript</h2><p>Paste authorized transcript text below.</p>")
                 manual_transcript = gr.Textbox(label="TRANSCRIPT TEXT", lines=16, placeholder="Paste transcript text here…", elem_classes="nexus-input")
                 manual_button = gr.Button("Import Transcript  ↗", variant="primary", elem_classes="gradient-action")
                 manual_output = gr.Textbox(label="IMPORT STATUS", lines=4, interactive=False)
@@ -404,7 +401,7 @@ with gr.Blocks(title="QueryWise | AI-Powered YouTube Search and Question Answeri
             video_index_button.click(index_video_ui, video_url_input, [video_index_output, chat_scope, manage_scope], show_progress="minimal")
             pdf_button.click(index_pdf_ui, pdf_input, [pdf_output, chat_scope, manage_scope], show_progress="minimal")
             website_button.click(index_website_ui, website_input, [website_output, chat_scope, manage_scope], show_progress="minimal")
-            manual_button.click(index_transcript_ui, [manual_url, manual_title, manual_transcript], [manual_output, chat_scope, manage_scope], show_progress="minimal")
+            manual_button.click(index_transcript_ui, [manual_transcript], [manual_output, chat_scope, manage_scope], show_progress="minimal")
             refresh_button.click(refresh_library_ui, outputs=[chat_scope, manage_scope], queue=False)
             delete_button.click(delete_source_ui, [manage_scope, confirm_actions], [management_output, chat_scope, manage_scope, confirm_actions], show_progress="minimal")
             clear_button.click(clear_library_ui, confirm_actions, [management_output, chat_scope, manage_scope, confirm_actions], show_progress="minimal")

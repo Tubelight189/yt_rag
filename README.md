@@ -29,9 +29,9 @@ OCR, recursive website crawling, formal answer-quality evaluation, and complete 
 
 | Feature | Implementation |
 |---|---|
-| Channel indexing | `IndexingService.index_channel()` uses YouTube Data API metadata, transcript retrieval, chunking, embeddings, and ChromaDB. Videos without captions are skipped. |
+| Channel indexing | `IndexingService.index_channel()` persists channel metadata, groups video chunks by `youtube_channel:<channel_id>`, and optionally stores a Gemini channel profile. |
 | Direct video indexing | Parses a YouTube URL/ID, fetches metadata/transcript, and indexes the transcript. |
-| Manual import | Authorized pasted transcript text uses the common chunk/embed/store pipeline. |
+| Manual import | Authorized pasted transcript text uses the common chunk/embed/store pipeline; the UI requires transcript text only. |
 | PDF indexing | `src.sources.extract_pdf()` uses PyMuPDF and stores page numbers. |
 | Website indexing | `fetch_website()` validates public HTTP(S), limits redirects/size, removes common HTML boilerplate, and extracts title/text. |
 | Source dropdown | Labels are built from stored metadata; the internal value is stable `source_id`. |
